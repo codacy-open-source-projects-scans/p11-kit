@@ -20,7 +20,7 @@ P11KIT_AGE=3
 # ------------------------------------------------------------------------------
 # p11-kit RPC protocol versions
 P11KIT_RPC_MIN=0
-P11KIT_RPC_MAX=0
+P11KIT_RPC_MAX=1
 
 # ------------------------------------------------------------------------------
 
@@ -223,6 +223,15 @@ AC_ARG_WITH([module-path],
             [AS_HELP_STRING([--with-module-path], [Load modules with relative path names from here])],
             [module_path=$withval],
             [module_path=$libdir/pkcs11])
+
+AC_ARG_ENABLE([env-override-paths],
+	AS_HELP_STRING([--enable-env-override-paths],
+	               [Override config and module paths via environment varibles [[default=no]]]),,
+              [enable_env_override_paths=no])
+
+if test x$enable_env_override_paths = xyes; then
+	AC_DEFINE_UNQUOTED(P11_ENV_OVERRIDE_PATHS, 1, [Enable environmental path overrides])
+fi
 
 # We expand these so we have concrete paths
 p11_system_config=$system_config_dir
@@ -614,6 +623,9 @@ AC_DEFINE_UNQUOTED(SHLEXT, ["$SHLEXT"], [File extension for shared libraries])
 AC_SUBST(SHLEXT)
 
 AC_DEFINE_UNQUOTED(EXEEXT, ["$EXEEXT"], [File extension for executables])
+
+p11_shlext=$SHLEXT
+AC_SUBST(p11_shlext)
 
 privatedir='${libexecdir}/p11-kit'
 AC_SUBST(privatedir)
