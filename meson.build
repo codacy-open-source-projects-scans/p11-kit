@@ -1,5 +1,5 @@
 project('p11-kit', 'c',
-        version: '0.24.1',
+        version: '0.25.0',
         meson_version: '>= 0.49')
 
 version_arr = meson.project_version().split('.')
@@ -289,7 +289,6 @@ functions = [
   'reallocarray',
   'secure_getenv',
   'setenv',
-  'strerror_r',
   'strnstr',
   'vasprintf'
 ]
@@ -299,6 +298,26 @@ foreach f : functions
     conf.set('HAVE_' + f.underscorify().to_upper(), 1)
   endif
 endforeach
+
+if cc.has_function('strerror_r', prefix: '#include <string.h>')
+  strerror_r_code = '''
+#define _GNU_SOURCE
+#include <errno.h>
+#include <string.h>
+
+int main (void)
+{
+    /* GNU strerror_r returns char *, XSI returns int */
+    char buf[32];
+    return *strerror_r (EINVAL, buf, 32);
+}
+'''
+  if cc.compiles(strerror_r_code, name : 'GNU strerror_r check')
+    conf.set('HAVE_GNU_STRERROR_R', 1)
+  else
+    conf.set('HAVE_XSI_STRERROR_R', 1)
+  endif
+endif
 
 conf.set10('HAVE_DECL_PROGRAM_INVOCATION_SHORT_NAME',
            cc.has_header_symbol('errno.h',
