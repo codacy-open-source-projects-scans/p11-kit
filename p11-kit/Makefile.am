@@ -35,14 +35,11 @@ VIRTUAL_GENERATED = \
 	p11-kit/virtual-base-generated.h \
 	$(NULL)
 
-BUILT_SOURCES += $(VIRTUAL_GENERATED) \
-	$(NULL)
+BUILT_SOURCES += $(VIRTUAL_GENERATED)
 
 p11-kit/virtual.c: $(VIRTUAL_GENERATED)
 
-CLEANFILES += \
-	$(VIRTUAL_GENERATED) \
-	$(NULL)
+CLEANFILES += $(VIRTUAL_GENERATED)
 
 p11-kit/virtual-ffi-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
@@ -106,6 +103,22 @@ libp11_kit_la_LDFLAGS += -Wl,--version-script=$(srcdir)/p11-kit/libp11-kit.map
 else
 libp11_kit_la_LDFLAGS += -export-symbols-regex '^C_GetFunctionList|^C_GetInterface|^p11_kit_'
 endif
+
+PROXY_GENERATED = \
+	p11-kit/proxy-generated.h \
+	$(NULL)
+
+BUILT_SOURCES += $(PROXY_GENERATED)
+
+p11-kit/proxy.c: $(PROXY_GENERATED)
+
+CLEANFILES += $(PROXY_GENERATED)
+
+p11-kit/proxy-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
+		--template $(srcdir)/p11-kit/templates/proxy-wrappers.py \
+		--excludes $(srcdir)/p11-kit/templates/proxy-excludes.list \
+		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
 
 libp11_kit_la_SOURCES = \
 	p11-kit/proxy.c p11-kit/proxy.h p11-kit/proxy-init.c \
@@ -253,6 +266,7 @@ p11_kit_p11_kit_SOURCES = \
 	p11-kit/add-profile.c \
 	p11-kit/delete-object.c \
 	p11-kit/delete-profile.c \
+	p11-kit/export-object.c \
 	p11-kit/list-objects.c \
 	p11-kit/list-profiles.c \
 	p11-kit/lists.c \
@@ -277,6 +291,7 @@ p11_kit_p11_kit_testable_SOURCES = \
 	p11-kit/add-profile.c \
 	p11-kit/delete-object.c \
 	p11-kit/delete-profile.c \
+	p11-kit/export-object.c \
 	p11-kit/list-objects.c \
 	p11-kit/list-profiles.c \
 	p11-kit/lists.c \
@@ -394,6 +409,7 @@ if !OS_WIN32
 c_tests += test-server
 sh_tests += \
 	p11-kit/test-profiles.sh \
+	p11-kit/test-objects.sh \
 	p11-kit/test-server.sh \
 	$(NULL)
 endif
@@ -573,6 +589,7 @@ EXTRA_DIST += \
 	p11-kit/test-mock.c \
 	p11-kit/test-transport-base.c \
 	p11-kit/test-profiles.sh \
+	p11-kit/test-objects.sh \
 	p11-kit/test-messages.sh \
 	p11-kit/test-server.sh \
 	$(NULL)

@@ -36,14 +36,16 @@
 
 #include "config.h"
 
-#include "attrs.h"
+#include "buffer.h"
 #include "constants.h"
 #include "debug.h"
 #include "iter.h"
 #include "message.h"
+#include "pem.h"
 #include "tool.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #ifdef ENABLE_NLS
@@ -54,22 +56,88 @@
 #endif
 
 int
-p11_kit_delete_profile (int argc,
-			char *argv[]);
+p11_kit_export_object (int argc,
+		       char *argv[]);
+
+static void
+export_attribute (P11KitIter *iter,
+		  CK_ATTRIBUTE_TYPE type,
+		  const char *label)
+{
+	p11_buffer buf;
+	CK_ATTRIBUTE attr = { type, NULL_PTR, 0 };
+
+	if (!p11_buffer_init (&buf, 0)) {
+		p11_message (_("failed to initialize buffer"));
+		return;
+	}
+
+	if (p11_kit_iter_get_attributes (iter, &attr, 1) != CKR_OK) {
+		p11_message (_("failed to retrieve attribute length of an object"));
+		goto cleanup;
+	}
+
+	attr.pValue = malloc (attr.ulValueLen);
+	if (attr.pValue == NULL) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
+
+	if (p11_kit_iter_get_attributes (iter, &attr, 1) != CKR_OK) {
+		p11_message (_("failed to retrieve attribute of an object"));
+		goto cleanup;
+	}
+
+	if (!p11_pem_write (attr.pValue, attr.ulValueLen, label, &buf)) {
+		p11_message (_("failed to convert DER to PEM"));
+		goto cleanup;
+	}
+
+	if (fwrite (buf.data, 1, buf.len, stdout) != buf.len) {
+		p11_message (_("failed to write PEM data to stdout"));
+		goto cleanup;
+	}
+
+cleanup:
+	p11_buffer_uninit (&buf);
+	free (attr.pValue);
+}
+
+static void
+export_certificate (P11KitIter *iter)
+{
+	const char *type_str;
+	CK_CERTIFICATE_TYPE cert_type;
+	CK_ATTRIBUTE attr = { CKA_CERTIFICATE_TYPE, &cert_type, sizeof (cert_type) };
+
+	if (p11_kit_iter_get_attributes (iter, &attr, 1) != CKR_OK) {
+		p11_message (_("failed to retrieve attribute of an object"));
+		return;
+	}
+
+	switch (cert_type) {
+	case CKC_X_509:
+		export_attribute (iter, CKA_VALUE, "CERTIFICATE");
+		break;
+	default:
+		type_str = p11_constant_nick (p11_constant_certs, cert_type);
+		if (type_str == NULL)
+			type_str = "(unknown)";
+		p11_message (_("unsupported certificate type: %s"), type_str);
+		break;
+	}
+}
 
 static int
-delete_profile (const char *token_str,
-		CK_PROFILE_ID profile)
+export_object (const char *token_str)
 {
 	int ret = 1;
+	CK_RV rv;
 	CK_FUNCTION_LIST **modules = NULL;
 	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
-	CK_OBJECT_CLASS klass = CKO_PROFILE;
-	CK_PROFILE_ID profile_id = CKP_INVALID_ID;
-	CK_ATTRIBUTE matching = { CKA_CLASS, &klass, sizeof (klass) };
-	CK_ATTRIBUTE attr = { CKA_PROFILE_ID, &profile_id, sizeof (profile_id) };
-	CK_RV rv;
+	CK_OBJECT_CLASS klass;
+	CK_ATTRIBUTE attr = { CKA_CLASS, &klass, sizeof (klass) };
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
@@ -88,25 +156,29 @@ delete_profile (const char *token_str,
 		goto cleanup;
 	}
 
-	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WANT_WRITABLE);
+	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WITH_LOGIN);
 	if (iter == NULL) {
 		p11_message (_("failed to initialize iterator"));
 		goto cleanup;
 	}
 
-	p11_kit_iter_add_filter (iter, &matching, 1);
 	p11_kit_iter_begin (iter, modules);
-	while ((rv = p11_kit_iter_next (iter)) == CKR_OK) {
+	while (p11_kit_iter_next (iter) == CKR_OK) {
 		rv = p11_kit_iter_get_attributes (iter, &attr, 1);
 		if (rv != CKR_OK) {
 			p11_message (_("failed to retrieve attribute of an object"));
 			goto cleanup;
 		}
 
-		if (profile_id == profile) {
-			rv = p11_kit_iter_destroy_object (iter);
-			if (rv != CKR_OK)
-				p11_message (_("failed to delete the profile"));
+		switch (klass) {
+		case CKO_CERTIFICATE:
+			export_certificate (iter);
+			break;
+		case CKO_PUBLIC_KEY:
+			export_attribute (iter, CKA_PUBLIC_KEY_INFO, "PUBLIC KEY");
+			break;
+		default:
+			break;
 		}
 	}
 
@@ -122,39 +194,28 @@ cleanup:
 }
 
 int
-p11_kit_delete_profile (int argc,
-			char *argv[])
+p11_kit_export_object (int argc,
+		       char *argv[])
 {
-	int opt, ret = 2;
-	CK_ULONG profile = CKA_INVALID;
-	p11_dict *profile_nicks = NULL;
+	int opt;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
-		opt_profile = 'p',
 	};
 
 	struct option options[] = {
 		{ "verbose", no_argument, NULL, opt_verbose },
 		{ "quiet", no_argument, NULL, opt_quiet },
 		{ "help", no_argument, NULL, opt_help },
-		{ "profile", required_argument, NULL, opt_profile },
 		{ 0 },
 	};
 
 	p11_tool_desc usages[] = {
-		{ 0, "usage: p11-kit delete-profile --profile profile pkcs11:token" },
-		{ opt_profile, "specify the profile to delete" },
+		{ 0, "usage: p11-kit export-object pkcs11:token" },
 		{ 0 },
 	};
-
-	profile_nicks = p11_constant_reverse (true);
-	if (profile_nicks == NULL) {
-		p11_message (_("failed to allocate memory"));
-		goto cleanup;
-	}
 
 	while ((opt = p11_tool_getopt (argc, argv, options)) != -1) {
 		switch (opt) {
@@ -166,24 +227,9 @@ p11_kit_delete_profile (int argc,
 			break;
 		case opt_help:
 			p11_tool_usage (usages, options);
-			ret = 0;
-			goto cleanup;
-		case opt_profile:
-			if (profile != CKA_INVALID) {
-				p11_message (_("multiple profiles specified"));
-				goto cleanup;
-			}
-
-			profile = p11_constant_resolve (profile_nicks, optarg);
-			if (profile == CKA_INVALID)
-				profile = strtol (optarg, NULL, 0);
-			if (profile == 0) {
-				p11_message (_("failed to convert profile argument: %s"), optarg);
-				goto cleanup;
-			}
-			break;
+			return 0;
 		case '?':
-			goto cleanup;
+			return 2;
 		default:
 			assert_not_reached ();
 			break;
@@ -195,18 +241,8 @@ p11_kit_delete_profile (int argc,
 
 	if (argc != 1) {
 		p11_tool_usage (usages, options);
-		goto cleanup;
+		return 2;
 	}
 
-	if (profile == CKA_INVALID) {
-		p11_message (_("no profile specified"));
-		goto cleanup;
-	}
-
-	ret = delete_profile (*argv, profile);
-
-cleanup:
-	p11_dict_free (profile_nicks);
-
-	return ret;
+	return export_object (*argv);
 }

@@ -103,6 +103,18 @@ libp11_kit_sources = [
   'util.c'
 ]
 
+libp11_kit_sources += custom_target('generate proxy-generated.h',
+                                    input: pkcs11_json,
+                                    output: 'proxy-generated.h',
+                                    command: [
+                                      python,
+                                      meson.current_source_dir() / 'gen-wrappers.py',
+                                      '--template', meson.current_source_dir() / 'templates' / 'proxy-wrappers.py',
+                                      '--excludes', meson.current_source_dir() / 'templates' / 'proxy-excludes.list',
+                                      '--infile', '@INPUT@',
+                                      '--outfile', '@OUTPUT@',
+                                    ])
+
 libp11_kit_symbol_map = meson.current_source_dir() / 'libp11-kit.map'
 libp11_kit_ldflags = cc.get_supported_link_arguments([
   '-Wl,--version-script,' + libp11_kit_symbol_map
@@ -201,6 +213,7 @@ p11_kit_sources = [
   'add-profile.c',
   'delete-object.c',
   'delete-profile.c',
+  'export-object.c',
   'list-objects.c',
   'list-profiles.c',
   'lists.c',
@@ -368,6 +381,10 @@ if get_option('test')
   if host_system != 'windows'
     test('test-profiles.sh',
          find_program('test-profiles.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-objects.sh',
+         find_program('test-objects.sh'),
          env: p11_kit_tests_env)
 
     test('test-messages.sh',
