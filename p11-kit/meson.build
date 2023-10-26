@@ -215,17 +215,24 @@ p11_kit_sources = [
   'delete-profile.c',
   'export-object.c',
   'generate-keypair.c',
+  'import-object.c',
   'list-objects.c',
   'list-profiles.c',
+  'list-mechanisms.c',
+  'list-tokens.c',
   'lists.c',
   'p11-kit.c',
   'print-config.c'
 ]
 
+if host_system != 'windows'
+  p11_kit_sources += 'tty.c'
+endif
+
 executable('p11-kit',
            p11_kit_sources,
            c_args: common_c_args + libp11_kit_internal_c_args,
-           dependencies: [libp11_tool_dep] + libffi_deps + dlopen_deps,
+           dependencies: [libp11_tool_dep] + libp11_asn1_deps + libffi_deps + dlopen_deps,
            link_with: [libp11_kit, libp11_kit_internal],
            install: true)
 
@@ -235,7 +242,7 @@ if get_option('test')
              c_args: common_c_args + libp11_kit_internal_c_args + [
                '-DP11_KIT_TESTABLE'
              ],
-             dependencies: [libp11_tool_dep] + libffi_deps + dlopen_deps,
+             dependencies: [libp11_tool_dep] + libp11_asn1_deps + libffi_deps + dlopen_deps,
              link_whole: libp11_kit_testable)
 endif
 
@@ -382,10 +389,6 @@ if get_option('test')
   p11_kit_tests_env.set('P11_MODULE_PATH', meson.current_build_dir())
 
   if host_system != 'windows'
-    test('test-profiles.sh',
-         find_program('test-profiles.sh'),
-         env: p11_kit_tests_env)
-
     test('test-objects.sh',
          find_program('test-objects.sh'),
          env: p11_kit_tests_env)
@@ -400,6 +403,32 @@ if get_option('test')
 
     test('test-server.sh',
          find_program('test-server.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-list-mechanisms.sh',
+         find_program('test-list-mechanisms.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-list-tokens.sh',
+         find_program('test-list-tokens.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-generate-keypair.sh',
+         find_program('test-generate-keypair.sh'),
+         env: p11_kit_tests_env)
+  endif
+
+  if with_asn1 and host_system != 'windows'
+    test('test-export-public.sh',
+         find_program('test-export-public.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-import-public.sh',
+         find_program('test-import-public.sh'),
+         env: p11_kit_tests_env)
+
+    test('test-profiles.sh',
+         find_program('test-profiles.sh'),
          env: p11_kit_tests_env)
   endif
 
@@ -416,7 +445,9 @@ if get_option('test')
                    'mock-eight': ['mock-module-ep6.c'],
                    'mock-nine': ['mock-module-ep7.c'],
                    'mock-ten': ['mock-module-ep8.c'],
-                   'mock-eleven': ['mock-module-ep9.c']
+                   'mock-eleven': ['mock-module-ep9.c'],
+                   'mock-twelve': ['mock-module-ep10.c'],
+                   'mock-thirteen': ['mock-module-ep11.c']
                  }
 
   if host_system != 'windows'
@@ -430,7 +461,7 @@ if get_option('test')
                   name_suffix: module_suffix,
                   link_args: p11_module_ldflags,
                   link_depends: [p11_module_symbol_map],
-                  dependencies: [libp11_test_dep])
+                  dependencies: [libp11_test_dep] + libp11_asn1_deps)
   endforeach
 endif
 

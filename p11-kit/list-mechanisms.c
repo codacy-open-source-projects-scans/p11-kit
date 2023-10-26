@@ -31,25 +31,24 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
  * DAMAGE.
  *
- * Author: Zoltan Fridrich <zfridric@redhat.com>
+ * Author: Alexander Sosedkin <asosedkin@redhat.com>
  */
 
 #include "config.h"
 
-#include "attrs.h"
 #include "constants.h"
+#define P11_DEBUG_FLAG P11_DEBUG_TOOL
 #include "debug.h"
 #include "iter.h"
 #include "message.h"
+#include "pkcs11.h"
+#include "print.h"
 #include "tool.h"
-
-#ifdef OS_UNIX
-#include "tty.h"
-#endif
+#include "uri.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #ifdef ENABLE_NLS
 #include <libintl.h>
@@ -59,32 +58,85 @@
 #endif
 
 int
-p11_kit_add_profile (int argc,
-		     char *argv[]);
+p11_kit_list_mechanisms (int argc,
+		         char *argv[]);
+
+static void
+print_mechanism_with_info (CK_MECHANISM_TYPE mechanism,
+		           CK_MECHANISM_INFO info)
+{
+	const char *mechanism_nick = NULL;
+
+	mechanism_nick = p11_constant_nick (p11_constant_mechanisms, mechanism);
+	if (mechanism_nick == NULL)
+		printf ("0x%lX (unknown):", mechanism);
+	else
+		printf ("%s:", mechanism_nick);
+
+	if (info.flags & CKF_HW)
+		printf (" hw");
+	if (info.flags & CKF_MESSAGE_ENCRYPT)
+		printf (" message-encrypt");
+	if (info.flags & CKF_MESSAGE_DECRYPT)
+		printf (" message-decrypt");
+	if (info.flags & CKF_MESSAGE_SIGN)
+		printf (" message-sign");
+	if (info.flags & CKF_MESSAGE_VERIFY)
+		printf (" message-verify");
+	if (info.flags & CKF_MULTI_MESSAGE)
+		printf (" multi-message");
+	if (info.flags & CKF_FIND_OBJECTS)
+		printf (" find-objects");
+	if (info.flags & CKF_ENCRYPT)
+		printf (" encrypt");
+	if (info.flags & CKF_DECRYPT)
+		printf (" decrypt");
+	if (info.flags & CKF_DIGEST)
+		printf (" digest");
+	if (info.flags & CKF_SIGN)
+		printf (" sign");
+	if (info.flags & CKF_SIGN_RECOVER)
+		printf (" sign-recover");
+	if (info.flags & CKF_VERIFY)
+		printf (" verify");
+	if (info.flags & CKF_SIGN_RECOVER)
+		printf (" verify-recover");
+	if (info.flags & CKF_GENERATE)
+		printf (" generate");
+	if (info.flags & CKF_GENERATE_KEY_PAIR)
+		printf (" generate-key-pair");
+	if (info.flags & CKF_WRAP)
+		printf (" wrap");
+	if (info.flags & CKF_UNWRAP)
+		printf (" unwrap");
+	if (info.flags & CKF_DERIVE)
+		printf (" derive");
+	if (info.flags & CKF_EXTENSION)
+		printf (" extension");
+
+	if (info.ulMaxKeySize)
+		printf (" key-size=%lu-%lu", info.ulMinKeySize, info.ulMaxKeySize);
+	printf ("\n");
+}
 
 static int
-add_profile (const char *token_str,
-	     CK_PROFILE_ID profile,
-	     bool login)
+list_mechanisms (const char *token_str)
 {
 	int ret = 1;
-	CK_RV rv;
-	CK_ULONG count = 0;
-	CK_OBJECT_HANDLE object = 0;
-	CK_SESSION_HANDLE session = 0;
-	CK_FUNCTION_LIST *module = NULL;
 	CK_FUNCTION_LIST **modules = NULL;
+	CK_FUNCTION_LIST *module = NULL;
 	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
-	P11KitIterBehavior behavior;
-	CK_BBOOL token = CK_TRUE;
-	CK_OBJECT_CLASS klass = CKO_PROFILE;
-	CK_ATTRIBUTE template[] = {
-	    { CKA_CLASS, &klass, sizeof (klass) },
-	    { CKA_TOKEN, &token, sizeof (token) },
-	    { CKA_PROFILE_ID, &profile, sizeof (profile) }
-	};
-	CK_ULONG template_len = sizeof (template) / sizeof (template[0]);
+	CK_SESSION_HANDLE session = 0;
+	CK_SLOT_ID slot = 0;
+	CK_TOKEN_INFO token_info;
+	CK_MECHANISM_INFO mechanism_info;
+	CK_MECHANISM_TYPE_PTR mechanisms = NULL;
+	CK_MECHANISM_TYPE_PTR mechanisms_new = NULL;
+	unsigned long mechanisms_count = 0;
+	unsigned long i;
+	p11_list_printer printer;
+	CK_RV rv;
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
@@ -103,19 +155,13 @@ add_profile (const char *token_str,
 		goto cleanup;
 	}
 
-	behavior = P11_KIT_ITER_WANT_WRITABLE | P11_KIT_ITER_WITH_SESSIONS | P11_KIT_ITER_WITHOUT_OBJECTS;
-	if (login) {
-		behavior |= P11_KIT_ITER_WITH_LOGIN;
-#ifdef OS_UNIX
-		p11_kit_uri_set_pin_source (uri, "tty");
-#endif
-	}
-	iter = p11_kit_iter_new (uri, behavior);
+	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WITH_LOGIN | P11_KIT_ITER_WITH_TOKENS | P11_KIT_ITER_WITHOUT_OBJECTS);
 	if (iter == NULL) {
-		p11_message (_("failed to initialize iterator"));
+		p11_debug ("failed to initialize iterator");
 		goto cleanup;
 	}
 
+	p11_list_printer_init (&printer, stdout, 0);
 	p11_kit_iter_begin (iter, modules);
 	rv = p11_kit_iter_next (iter);
 	if (rv != CKR_OK) {
@@ -126,45 +172,55 @@ add_profile (const char *token_str,
 		goto cleanup;
 	}
 
-	/* Module and session should always be set at this point.  */
 	module = p11_kit_iter_get_module (iter);
-	return_val_if_fail (module != NULL, 1);
-	session = p11_kit_iter_get_session (iter);
-	return_val_if_fail (session != CK_INVALID_HANDLE, 1);
+	if (module == NULL) {
+		p11_message (_("failed to obtain module"));
+		goto cleanup;
+	}
 
-	rv = module->C_FindObjectsInit (session, template, template_len);
+	slot = p11_kit_iter_get_slot (iter);
+
+	rv = module->C_GetTokenInfo (slot, &token_info);
 	if (rv != CKR_OK) {
-		p11_message (_("failed to initialize search for objects: %s"), p11_kit_strerror (rv));
+		p11_message (_("couldn't load token info: %s"), p11_kit_strerror (rv));
 		goto cleanup;
 	}
 
-	rv = module->C_FindObjects (session, &object, 1, &count);
+	rv = module->C_GetMechanismList (slot, NULL, &mechanisms_count);
 	if (rv != CKR_OK) {
-		module->C_FindObjectsFinal (session);
-		p11_message (_("failed to search for objects: %s"), p11_kit_strerror (rv));
+		p11_message (_("querying amount of mechanisms failed: %s"), p11_kit_strerror (rv));
 		goto cleanup;
 	}
 
-	rv = module->C_FindObjectsFinal (session);
+	mechanisms_new = reallocarray (mechanisms, mechanisms_count, sizeof (CK_MECHANISM_TYPE));
+	if (mechanisms_new == NULL) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
+	mechanisms = mechanisms_new;
+
+	rv = module->C_GetMechanismList (slot, mechanisms, &mechanisms_count);
 	if (rv != CKR_OK) {
-		p11_message (_("failed to finalize search for objects: %s"), p11_kit_strerror (rv));
+		p11_message (_("querying mechanisms failed: %s"), p11_kit_strerror (rv));
 		goto cleanup;
 	}
 
-	if (count != 0) {
-		p11_message (_("profile already exists"));
-		goto cleanup;
-	}
+	for (i = 0; i < mechanisms_count; i++) {
+		rv = module->C_GetMechanismInfo (slot, mechanisms[i], &mechanism_info);
+		if (rv != CKR_OK) {
+			p11_message (_("querying mechanism info failed: %s"), p11_kit_strerror (rv));
+			goto cleanup;
+		}
 
-	rv = module->C_CreateObject (session, template, template_len, &object);
-	if (rv != CKR_OK) {
-		p11_message (_("failed to create profile object: %s"), p11_kit_strerror (rv));
-		goto cleanup;
+		print_mechanism_with_info (mechanisms[i], mechanism_info);
 	}
-
 	ret = 0;
 
 cleanup:
+	if (session)
+		module->C_CloseSession (session);
+	if (mechanisms)
+		free (mechanisms);
 	p11_kit_iter_free (iter);
 	p11_kit_uri_free (uri);
 	if (modules != NULL)
@@ -174,43 +230,28 @@ cleanup:
 }
 
 int
-p11_kit_add_profile (int argc,
-		     char *argv[])
+p11_kit_list_mechanisms (int argc,
+		         char *argv[])
 {
-	int opt, ret = 2;
-	CK_ULONG profile = CKA_INVALID;
-	p11_dict *profile_nicks = NULL;
-	bool login = false;
+	int opt;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
-		opt_profile = 'p',
-		opt_login = 'l',
 	};
 
 	struct option options[] = {
 		{ "verbose", no_argument, NULL, opt_verbose },
 		{ "quiet", no_argument, NULL, opt_quiet },
 		{ "help", no_argument, NULL, opt_help },
-		{ "profile", required_argument, NULL, opt_profile },
-		{ "login", no_argument, NULL, opt_login },
 		{ 0 },
 	};
 
 	p11_tool_desc usages[] = {
-		{ 0, "usage: p11-kit add-profile --profile profile pkcs11:token" },
-		{ opt_profile, "specify the profile to add" },
-		{ opt_login, "login to the token" },
+		{ 0, "usage: p11-kit list-mechanisms pkcs11:token" },
 		{ 0 },
 	};
-
-	profile_nicks = p11_constant_reverse (true);
-	if (profile_nicks == NULL) {
-		p11_message (_("failed to allocate memory"));
-		goto cleanup;
-	}
 
 	while ((opt = p11_tool_getopt (argc, argv, options)) != -1) {
 		switch (opt) {
@@ -222,27 +263,9 @@ p11_kit_add_profile (int argc,
 			break;
 		case opt_help:
 			p11_tool_usage (usages, options);
-			ret = 0;
-			goto cleanup;
-		case opt_profile:
-			if (profile != CKA_INVALID) {
-				p11_message (_("multiple profiles specified"));
-				goto cleanup;
-			}
-
-			profile = p11_constant_resolve (profile_nicks, optarg);
-			if (profile == CKA_INVALID)
-				profile = strtol (optarg, NULL, 0);
-			if (profile == 0) {
-				p11_message (_("failed to convert profile argument: %s"), optarg);
-				goto cleanup;
-			}
-			break;
-		case opt_login:
-			login = true;
-			break;
+			return 0;
 		case '?':
-			goto cleanup;
+			return 2;
 		default:
 			assert_not_reached ();
 			break;
@@ -254,28 +277,8 @@ p11_kit_add_profile (int argc,
 
 	if (argc != 1) {
 		p11_tool_usage (usages, options);
-		goto cleanup;
+		return 2;
 	}
 
-	if (profile == CKA_INVALID) {
-		p11_message (_("no profile specified"));
-		goto cleanup;
-	}
-
-#ifdef OS_UNIX
-	/* Register a fallback PIN callback that reads from terminal.
-	 * We don't care whether the registration succeeds as it is a fallback.
-	 */
-	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
-#endif
-
-	ret = add_profile (*argv, profile, login);
-
-cleanup:
-#ifdef OS_UNIX
-	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
-#endif
-	p11_dict_free (profile_nicks);
-
-	return ret;
+	return list_mechanisms (*argv);
 }

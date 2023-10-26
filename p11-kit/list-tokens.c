@@ -1,7 +1,5 @@
 /*
- * Copyright (c) 2023, Red Hat Inc.
- *
- * All rights reserved.
+ * Copyright (c) 2023, Red Hat, Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,24 +29,22 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
  * DAMAGE.
  *
- * Author: Zoltan Fridrich <zfridric@redhat.com>
+ * Author: Daiki Ueno
  */
 
 #include "config.h"
 
-#include "constants.h"
+#define P11_DEBUG_FLAG P11_DEBUG_TOOL
 #include "debug.h"
 #include "iter.h"
 #include "message.h"
+#include "print.h"
 #include "tool.h"
 
-#ifdef OS_UNIX
-#include "tty.h"
-#endif
-
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
-#include <string.h>
+#include <stdlib.h>
 
 #ifdef ENABLE_NLS
 #include <libintl.h>
@@ -57,31 +53,25 @@
 #define _(x) (x)
 #endif
 
-#define MAX_OBJECTS 4
+void  print_token_info    (p11_list_printer *printer,
+                           CK_TOKEN_INFO    *info);
 
-int
-p11_kit_list_profiles (int argc,
-		       char *argv[]);
+char *format_token_uri    (CK_TOKEN_INFO    *info);
+
+int   p11_kit_list_tokens (int               argc,
+                           char             *argv[]);
 
 static int
-list_profiles (const char *token_str,
-	       bool login)
+list_tokens (const char *token_str,
+	     bool only_uris)
 {
 	int ret = 1;
-	CK_RV rv;
-	const char *profile_nick = NULL;
-	CK_OBJECT_HANDLE objects[MAX_OBJECTS];
-	CK_ULONG i, count = 0;
-	CK_SESSION_HANDLE session = 0;
-	CK_FUNCTION_LIST *module = NULL;
 	CK_FUNCTION_LIST **modules = NULL;
 	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
-	P11KitIterBehavior behavior;
-	CK_PROFILE_ID profile_id = CKP_INVALID_ID;
-	CK_OBJECT_CLASS klass = CKO_PROFILE;
-	CK_ATTRIBUTE template = { CKA_CLASS, &klass, sizeof (klass) };
-	CK_ATTRIBUTE attr = { CKA_PROFILE_ID, &profile_id, sizeof (profile_id) };
+	p11_list_printer printer;
+
+	p11_list_printer_init (&printer, stdout, 0);
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
@@ -100,70 +90,31 @@ list_profiles (const char *token_str,
 		goto cleanup;
 	}
 
-	behavior = P11_KIT_ITER_WITH_SESSIONS | P11_KIT_ITER_WITHOUT_OBJECTS;
-	if (login) {
-		behavior |= P11_KIT_ITER_WITH_LOGIN;
-#ifdef OS_UNIX
-		p11_kit_uri_set_pin_source (uri, "tty");
-#endif
-	}
-	iter = p11_kit_iter_new (uri, behavior);
+	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WITH_TOKENS |
+				 P11_KIT_ITER_WITHOUT_OBJECTS);
 	if (iter == NULL) {
-		p11_message (_("failed to initialize iterator"));
+		p11_debug ("failed to initialize iterator");
 		goto cleanup;
 	}
 
 	p11_kit_iter_begin (iter, modules);
-	rv = p11_kit_iter_next (iter);
-	if (rv != CKR_OK) {
-		if (rv == CKR_CANCEL)
-			p11_message (_("no matching token"));
-		else
-			p11_message (_("failed to find token: %s"), p11_kit_strerror (rv));
-		goto cleanup;
-	}
+	while (p11_kit_iter_next (iter) == CKR_OK) {
+		CK_TOKEN_INFO *info = p11_kit_iter_get_token (iter);
+		char *value;
 
-	/* Module and session should always be set at this point.  */
-	module = p11_kit_iter_get_module (iter);
-	return_val_if_fail (module != NULL, 1);
-	session = p11_kit_iter_get_session (iter);
-	return_val_if_fail (session != CK_INVALID_HANDLE, 1);
+		if (only_uris) {
+			value = format_token_uri (info);
+			if (value)
+				printf ("%s\n", value);
+			free (value);
+		} else {
+			value = p11_kit_space_strdup (info->label, sizeof (info->label));
+			p11_list_printer_start_section (&printer, "token", "%s", value);
+			free (value);
 
-	rv = module->C_FindObjectsInit (session, &template, 1);
-	if (rv != CKR_OK) {
-		p11_message (_("failed to initialize search for objects: %s"), p11_kit_strerror (rv));
-		goto cleanup;
-	}
-
-	do {
-		rv = module->C_FindObjects (session, objects, MAX_OBJECTS, &count);
-		if (rv != CKR_OK) {
-			module->C_FindObjectsFinal (session);
-			p11_message (_("failed to search for objects: %s"), p11_kit_strerror (rv));
-			goto cleanup;
+			print_token_info (&printer, info);
+			p11_list_printer_end_section (&printer);
 		}
-
-		for (i = 0; i < count; ++i) {
-			rv = module->C_GetAttributeValue (session, objects[i], &attr, 1);
-			if (rv != CKR_OK) {
-				module->C_FindObjectsFinal (session);
-				p11_message (_("failed to retrieve attribute of an object: %s"),
-					     p11_kit_strerror (rv));
-				goto cleanup;
-			}
-
-			profile_nick = p11_constant_nick (p11_constant_profiles, profile_id);
-			if (profile_nick == NULL)
-				printf ("0x%lX (unknown)\n", profile_id);
-			else
-				printf ("%s\n", profile_nick);
-		}
-	} while (count > 0);
-
-	rv = module->C_FindObjectsFinal (session);
-	if (rv != CKR_OK) {
-		p11_message (_("failed to finalize search for objects: %s"), p11_kit_strerror (rv));
-		goto cleanup;
 	}
 
 	ret = 0;
@@ -178,47 +129,53 @@ cleanup:
 }
 
 int
-p11_kit_list_profiles (int argc,
-		       char *argv[])
+p11_kit_list_tokens (int argc,
+		     char *argv[])
 {
-	int opt, ret;
-	bool login = false;
+	int opt;
+	bool only_uris = false;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
-		opt_login = 'l',
+		opt_only_urls = CHAR_MAX + 1,
 	};
 
 	struct option options[] = {
 		{ "verbose", no_argument, NULL, opt_verbose },
 		{ "quiet", no_argument, NULL, opt_quiet },
+		{ "only-uris", no_argument, NULL, opt_only_urls },
 		{ "help", no_argument, NULL, opt_help },
-		{ "login", no_argument, NULL, opt_login },
 		{ 0 },
 	};
 
 	p11_tool_desc usages[] = {
-		{ 0, "usage: p11-kit list-profiles pkcs11:token" },
-		{ opt_login, "login to the token" },
+		{ 0, "usage: p11-kit list-tokens" },
+		{ opt_verbose, "show verbose debug output", },
+		{ opt_quiet, "suppress command output", },
+		{ opt_only_urls, "only print token URIs", },
 		{ 0 },
 	};
 
 	while ((opt = p11_tool_getopt (argc, argv, options)) != -1) {
 		switch (opt) {
+
 		case opt_verbose:
 			p11_kit_be_loud ();
 			break;
+
 		case opt_quiet:
 			p11_kit_be_quiet ();
 			break;
+
+		case opt_only_urls:
+			only_uris = true;
+			break;
+
 		case opt_help:
 			p11_tool_usage (usages, options);
 			return 0;
-		case opt_login:
-			login = true;
-			break;
 		case '?':
 			return 2;
 		default:
@@ -235,18 +192,5 @@ p11_kit_list_profiles (int argc,
 		return 2;
 	}
 
-#ifdef OS_UNIX
-	/* Register a fallback PIN callback that reads from terminal.
-	 * We don't care whether the registration succeeds as it is a fallback.
-	 */
-	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
-#endif
-
-	ret = list_profiles (*argv, login);
-
-#ifdef OS_UNIX
-	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
-#endif
-
-	return ret;
+	return list_tokens (*argv, only_uris);
 }

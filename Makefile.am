@@ -4,6 +4,7 @@ NULL =
 AM_CPPFLAGS = \
 	-I$(top_srcdir) \
 	-I$(top_srcdir)/common \
+	-I$(top_builddir)/common \
 	-DBINDIR=\"$(bindir)\" \
 	-DBUILDDIR=\"$(abs_builddir)\" \
 	-DDATA_DIR=\"$(datadir)\" \
@@ -65,6 +66,7 @@ ACLOCAL_AMFLAGS = -I build/m4
 
 DISTCHECK_CONFIGURE_FLAGS = \
 	--enable-doc \
+	--with-libtasn1 \
 	--without-systemd \
 	--without-bash-completion \
 	--disable-coverage \

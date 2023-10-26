@@ -1,7 +1,7 @@
 AC_PREREQ(2.61)
 
 AC_INIT([p11-kit],
-	[0.25.0],
+	[0.25.1],
 	[https://github.com/p11-glue/p11-kit/issues],
 	[p11-kit],
 	[https://p11-glue.github.io/p11-glue/p11-kit.html])
@@ -145,6 +145,8 @@ if test "$os_unix" = "yes"; then
 	AC_CHECK_FUNCS([getpeerucred])
 	AC_CHECK_FUNCS([issetugid])
 	AC_CHECK_FUNCS([isatty])
+	AC_CHECK_FUNCS([readpassphrase])
+	AM_CONDITIONAL([NEED_READPASSPHRASE], [test "$ac_cv_func_readpassphrase" != "yes"])
 
 	AC_CHECK_FUNC(
 		[strerror_r],

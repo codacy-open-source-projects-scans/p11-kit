@@ -45,6 +45,11 @@
 #include "message.h"
 #include "print.h"
 #include "tool.h"
+
+#ifdef OS_UNIX
+#include "tty.h"
+#endif
+
 #include "uri.h"
 
 #include <assert.h>
@@ -151,21 +156,21 @@ print_date_attribute (p11_list_printer *printer,
 }
 
 static inline void
-print_bool_attribute (p11_list_printer *printer,
-		      const CK_ATTRIBUTE *attr)
+p11_array_push_flag (p11_array *flags,
+		     const CK_ATTRIBUTE *attr)
 {
 	const char *type_str;
 
 	if (attr->ulValueLen == CK_UNAVAILABLE_INFORMATION ||
-	    attr->ulValueLen < sizeof (CK_BBOOL))
+	    attr->ulValueLen < sizeof (CK_BBOOL) ||
+	    !*((CK_BBOOL *)attr->pValue))
 		return;
 
 	type_str = p11_constant_nick (p11_constant_types, attr->type);
 	if (type_str == NULL)
 		type_str = "(unknown)";
 
-	p11_list_printer_write_value (printer, type_str, "%s",
-				      *((CK_BBOOL *)attr->pValue) ? "true" : "false");
+	p11_array_push (flags, (void *)type_str);
 }
 
 static char *
@@ -181,7 +186,7 @@ get_object_uri (P11KitIter *iter,
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
-		p11_message (_("failed to allocate memory for URI"));
+		p11_message (_("failed to allocate memory"));
 		return NULL;
 	}
 
@@ -234,7 +239,7 @@ print_object (p11_list_printer *printer,
 	CK_MECHANISM_TYPE mechanism_type;
 	CK_BBOOL trusted, local, token, private, modifiable, copyable, destroyable;
 	CK_DATE start_date, end_date;
-	p11_array *allocated;
+	p11_array *allocated = NULL, *flags = NULL;
 	char *uri_str;
 	size_t i;
 
@@ -269,7 +274,7 @@ print_object (p11_list_printer *printer,
 	allocated = p11_array_new (free);
 	if (allocated == NULL) {
 		p11_message (_("failed to allocate memory"));
-		return;
+		goto cleanup;
 	}
 
 	p11_kit_iter_get_attributes (iter, attrs, n_attrs);
@@ -320,37 +325,50 @@ print_object (p11_list_printer *printer,
 	print_byte_array_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_ID));
 	print_date_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_START_DATE));
 	print_date_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_END_DATE));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_TRUSTED));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_LOCAL));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_TOKEN));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_PRIVATE));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_MODIFIABLE));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_COPYABLE));
-	print_bool_attribute (printer, p11_attrs_findn (attrs, n_attrs, CKA_DESTROYABLE));
+
+	/* print flags */
+	flags = p11_array_new (NULL);
+	if (flags == NULL) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_TRUSTED));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_LOCAL));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_TOKEN));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_PRIVATE));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_MODIFIABLE));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_COPYABLE));
+	p11_array_push_flag (flags, p11_attrs_findn (attrs, n_attrs, CKA_DESTROYABLE));
+	if (flags->num > 0)
+		p11_list_printer_write_array (printer, "flags", flags);
+
 	p11_list_printer_end_section (printer);
 
 cleanup:
 	p11_array_free (allocated);
+	p11_array_free (flags);
 }
 
 static int
-list_objects (const char *token_str)
+list_objects (const char *token_str,
+	      bool login)
 {
 	int ret = 1;
 	size_t i;
 	CK_FUNCTION_LIST **modules = NULL;
 	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
+	P11KitIterBehavior behavior;
 	p11_list_printer printer;
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
-		p11_message (_("failed to allocate memory for URI"));
+		p11_message (_("failed to allocate memory"));
 		goto cleanup;
 	}
 
 	if (p11_kit_uri_parse (token_str, P11_KIT_URI_FOR_OBJECT_ON_TOKEN, uri) != P11_KIT_URI_OK) {
-		p11_message (_("failed to parse the token URI"));
+		p11_message (_("failed to parse URI"));
 		goto cleanup;
 	}
 
@@ -360,7 +378,14 @@ list_objects (const char *token_str)
 		goto cleanup;
 	}
 
-	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WITH_LOGIN);
+	behavior = 0;
+	if (login) {
+		behavior |= P11_KIT_ITER_WITH_LOGIN;
+#ifdef OS_UNIX
+		p11_kit_uri_set_pin_source (uri, "tty");
+#endif
+	}
+	iter = p11_kit_iter_new (uri, behavior);
 	if (iter == NULL) {
 		p11_message (_("failed to initialize iterator"));
 		goto cleanup;
@@ -386,23 +411,27 @@ int
 p11_kit_list_objects (int argc,
 		      char *argv[])
 {
-	int opt;
+	int opt, ret;
+	bool login = false;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
+		opt_login = 'l',
 	};
 
 	struct option options[] = {
 		{ "verbose", no_argument, NULL, opt_verbose },
 		{ "quiet", no_argument, NULL, opt_quiet },
 		{ "help", no_argument, NULL, opt_help },
+		{ "login", no_argument, NULL, opt_login },
 		{ 0 },
 	};
 
 	p11_tool_desc usages[] = {
 		{ 0, "usage: p11-kit list-objects pkcs11:token" },
+		{ opt_login, "login to the token" },
 		{ 0 },
 	};
 
@@ -417,6 +446,9 @@ p11_kit_list_objects (int argc,
 		case opt_help:
 			p11_tool_usage (usages, options);
 			return 0;
+		case opt_login:
+			login = true;
+			break;
 		case '?':
 			return 2;
 		default:
@@ -433,5 +465,18 @@ p11_kit_list_objects (int argc,
 		return 2;
 	}
 
-	return list_objects (*argv);
+#ifdef OS_UNIX
+	/* Register a fallback PIN callback that reads from terminal.
+	 * We don't care whether the registration succeeds as it is a fallback.
+	 */
+	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
+#endif
+
+	ret = list_objects (*argv, login);
+
+#ifdef OS_UNIX
+	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
+#endif
+
+	return ret;
 }

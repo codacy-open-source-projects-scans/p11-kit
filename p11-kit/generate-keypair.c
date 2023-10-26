@@ -43,6 +43,10 @@
 #include "message.h"
 #include "tool.h"
 
+#ifdef OS_UNIX
+#include "tty.h"
+#endif
+
 #ifdef P11_KIT_TESTABLE
 #include "mock.h"
 #endif
@@ -80,7 +84,8 @@ get_mechanism (const char *type)
 		m.mechanism = CKM_RSA_PKCS_KEY_PAIR_GEN;
 	else if (p11_ascii_strcaseeq (type, "ecdsa"))
 		m.mechanism = CKM_ECDSA_KEY_PAIR_GEN;
-	else if (p11_ascii_strcaseeq (type, "ed25519"))
+	else if (p11_ascii_strcaseeq (type, "ed25519") ||
+		 p11_ascii_strcaseeq (type, "ed448"))
 		m.mechanism = CKM_EC_EDWARDS_KEY_PAIR_GEN;
 
 	return m;
@@ -93,6 +98,8 @@ get_ec_params (const char *curve,
 	static const uint8_t OID_SECP256R1[] = { 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07 };
 	static const uint8_t OID_SECP384R1[] = { 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22 };
 	static const uint8_t OID_SECP521R1[] = { 0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23 };
+	static const uint8_t OID_ED25519[] = { 0x06, 0x03, 0x2b, 0x65, 0x70 };
+	static const uint8_t OID_ED448[] = { 0x06, 0x03, 0x2b, 0x65, 0x71 };
 
 	if (p11_ascii_strcaseeq (curve, "secp256r1")) {
 		*ec_params_len = sizeof (OID_SECP256R1);
@@ -103,6 +110,12 @@ get_ec_params (const char *curve,
 	} else if (p11_ascii_strcaseeq (curve, "secp521r1")) {
 		*ec_params_len = sizeof (OID_SECP521R1);
 		return OID_SECP521R1;
+	} else if (p11_ascii_strcaseeq (curve, "ed25519")) {
+		*ec_params_len = sizeof (OID_ED25519);
+		return OID_ED25519;
+	} else if (p11_ascii_strcaseeq (curve, "ed448")) {
+		*ec_params_len = sizeof (OID_ED448);
+		return OID_ED448;
 	}
 
 	return NULL;
@@ -246,17 +259,17 @@ generate_keypair (const char *token_str,
 		  CK_MECHANISM mechanism,
 		  CK_ULONG bits,
 		  const uint8_t *ec_params,
-		  size_t ec_params_len)
+		  size_t ec_params_len,
+		  bool login)
 {
 	int ret = 1;
 	CK_RV rv;
-	const char *pin = NULL;
 	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
+	P11KitIterBehavior behavior;
 	CK_FUNCTION_LIST **modules = NULL;
 	CK_FUNCTION_LIST *module = NULL;
 	CK_SESSION_HANDLE session = 0;
-	CK_SLOT_ID slot = 0;
 	CK_ATTRIBUTE *pubkey = NULL, *privkey = NULL;
 	CK_OBJECT_HANDLE pubkey_obj, privkey_obj;
 
@@ -268,12 +281,12 @@ generate_keypair (const char *token_str,
 
 	uri = p11_kit_uri_new ();
 	if (uri == NULL) {
-		p11_message (_("failed to allocate memory for URI"));
+		p11_message (_("failed to allocate memory"));
 		goto cleanup;
 	}
 
 	if (p11_kit_uri_parse (token_str, P11_KIT_URI_FOR_TOKEN, uri) != P11_KIT_URI_OK) {
-		p11_message (_("failed to parse the token URI"));
+		p11_message (_("failed to parse URI"));
 		goto cleanup;
 	}
 
@@ -283,7 +296,14 @@ generate_keypair (const char *token_str,
 		goto cleanup;
 	}
 
-	iter = p11_kit_iter_new (uri, P11_KIT_ITER_WITH_TOKENS | P11_KIT_ITER_WITHOUT_OBJECTS);
+	behavior = P11_KIT_ITER_WANT_WRITABLE | P11_KIT_ITER_WITH_SESSIONS | P11_KIT_ITER_WITHOUT_OBJECTS;
+	if (login) {
+		behavior |= P11_KIT_ITER_WITH_LOGIN;
+#ifdef OS_UNIX
+		p11_kit_uri_set_pin_source (uri, "tty");
+#endif
+	}
+	iter = p11_kit_iter_new (uri, behavior);
 	if (iter == NULL) {
 		p11_message (_("failed to initialize iterator"));
 		goto cleanup;
@@ -292,36 +312,18 @@ generate_keypair (const char *token_str,
 	p11_kit_iter_begin (iter, modules);
 	rv = p11_kit_iter_next (iter);
 	if (rv != CKR_OK) {
-		p11_message (_("failed to find the token: %s"), p11_kit_strerror (rv));
+		if (rv == CKR_CANCEL)
+			p11_message (_("no matching token"));
+		else
+			p11_message (_("failed to find token: %s"), p11_kit_strerror (rv));
 		goto cleanup;
 	}
 
+	/* Module and session should always be set at this point.  */
 	module = p11_kit_iter_get_module (iter);
-	if (module == NULL) {
-		p11_message (_("failed to obtain module"));
-		goto cleanup;
-	}
-
-	slot = p11_kit_iter_get_slot (iter);
-	if (slot == 0) {
-		p11_message (_("failed to obtain slot"));
-		goto cleanup;
-	}
-
-	rv = module->C_OpenSession (slot, CKF_SERIAL_SESSION | CKF_RW_SESSION, NULL, NULL, &session);
-	if (rv != CKR_OK) {
-		p11_message (_("failed to open session: %s"), p11_kit_strerror (rv));
-		goto cleanup;
-	}
-
-	pin = p11_kit_uri_get_pin_value (uri);
-	if (pin != NULL) {
-		rv = module->C_Login (session, CKU_USER, (unsigned char *)pin, strlen (pin));
-		if (rv != CKR_OK) {
-			p11_message (_("failed to login: %s"), p11_kit_strerror (rv));
-			goto cleanup;
-		}
-	}
+	return_val_if_fail (module != NULL, 1);
+	session = p11_kit_iter_get_session (iter);
+	return_val_if_fail (session != CK_INVALID_HANDLE, 1);
 
 	rv = module->C_GenerateKeyPair (session, &mechanism,
 					pubkey, p11_attrs_count (pubkey),
@@ -335,8 +337,6 @@ generate_keypair (const char *token_str,
 	ret = 0;
 
 cleanup:
-	if (session != 0)
-		module->C_CloseSession (session);
 	p11_attrs_free (pubkey);
 	p11_attrs_free (privkey);
 	p11_kit_iter_free (iter);
@@ -357,15 +357,17 @@ p11_kit_generate_keypair (int argc,
 	const uint8_t *ec_params = NULL;
 	size_t ec_params_len = 0;
 	CK_MECHANISM mechanism = { CKA_INVALID, NULL_PTR, 0 };
+	bool login = false;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
-		opt_label = 'l',
+		opt_label = 'L',
 		opt_type = 't',
 		opt_bits = 'b',
 		opt_curve = 'c',
+		opt_login = 'l',
 	};
 
 	struct option options[] = {
@@ -376,6 +378,7 @@ p11_kit_generate_keypair (int argc,
 		{ "type", required_argument, NULL, opt_type },
 		{ "bits", required_argument, NULL, opt_bits },
 		{ "curve", required_argument, NULL, opt_curve },
+		{ "login", no_argument, NULL, opt_login },
 		{ 0 },
 	};
 
@@ -386,6 +389,7 @@ p11_kit_generate_keypair (int argc,
 		{ opt_type, "type of keys to generate" },
 		{ opt_bits, "number of bits for key generation" },
 		{ opt_curve, "name of the curve for key generation" },
+		{ opt_login, "login to the token" },
 		{ 0 },
 	};
 
@@ -419,6 +423,9 @@ p11_kit_generate_keypair (int argc,
 				goto cleanup;
 			}
 			break;
+		case opt_login:
+			login = true;
+			break;
 		case opt_verbose:
 			p11_kit_be_loud ();
 			break;
@@ -448,9 +455,19 @@ p11_kit_generate_keypair (int argc,
 	if (!check_args (mechanism.mechanism, bits, ec_params))
 		goto cleanup;
 
-	ret = generate_keypair (*argv, label, mechanism, bits, ec_params, ec_params_len);
+#ifdef OS_UNIX
+	/* Register a fallback PIN callback that reads from terminal.
+	 * We don't care whether the registration succeeds as it is a fallback.
+	 */
+	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
+#endif
+
+	ret = generate_keypair (*argv, label, mechanism, bits, ec_params, ec_params_len, login);
 
 cleanup:
+#ifdef OS_UNIX
+	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
+#endif
 	free (label);
 
 	return ret;
