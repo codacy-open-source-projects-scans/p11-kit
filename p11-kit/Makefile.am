@@ -41,35 +41,35 @@ p11-kit/virtual.c: $(VIRTUAL_GENERATED)
 
 CLEANFILES += $(VIRTUAL_GENERATED)
 
-p11-kit/virtual-ffi-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+p11-kit/virtual-ffi-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/generated/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
 		--template $(srcdir)/p11-kit/templates/binding-wrappers.py \
 		--excludes $(srcdir)/p11-kit/templates/virtual-excludes.list \
-		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
+		--infile $(srcdir)/subprojects/pkcs11-json/generated/pkcs11.json --outfile $@
 
-p11-kit/virtual-fixed-wrappers.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+p11-kit/virtual-fixed-wrappers.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/generated/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
 		--template $(srcdir)/p11-kit/templates/fixed-wrappers.py \
 		--excludes $(srcdir)/p11-kit/templates/virtual-excludes.list \
 		--renames C_GetFunctionStatus:short C_CancelFunction:short \
 		--concat-lines \
-		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
+		--infile $(srcdir)/subprojects/pkcs11-json/generated/pkcs11.json --outfile $@
 
 p11-kit/virtual-fixed-closures.h: Makefile p11-kit/gen-fixed-closures.py
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-fixed-closures.py \
 		--closures $(closures) --outfile $@
 
-p11-kit/virtual-stack-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+p11-kit/virtual-stack-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/generated/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
 		--template $(srcdir)/p11-kit/templates/stack-wrappers.py \
 		--excludes $(srcdir)/p11-kit/templates/virtual-excludes.list \
-		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
+		--infile $(srcdir)/subprojects/pkcs11-json/generated/pkcs11.json --outfile $@
 
-p11-kit/virtual-base-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+p11-kit/virtual-base-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/generated/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
 		--template $(srcdir)/p11-kit/templates/base-wrappers.py \
 		--excludes $(srcdir)/p11-kit/templates/virtual-excludes.list \
-		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
+		--infile $(srcdir)/subprojects/pkcs11-json/generated/pkcs11.json --outfile $@
 
 lib_LTLIBRARIES += \
 	libp11-kit.la
@@ -114,11 +114,11 @@ p11-kit/proxy.c: $(PROXY_GENERATED)
 
 CLEANFILES += $(PROXY_GENERATED)
 
-p11-kit/proxy-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/pkcs11.json
+p11-kit/proxy-generated.h: Makefile p11-kit/gen-wrappers.py subprojects/pkcs11-json/generated/pkcs11.json
 	$(AM_V_GEN)$(PYTHON) $(srcdir)/p11-kit/gen-wrappers.py \
 		--template $(srcdir)/p11-kit/templates/proxy-wrappers.py \
 		--excludes $(srcdir)/p11-kit/templates/proxy-excludes.list \
-		--infile $(srcdir)/subprojects/pkcs11-json/pkcs11.json --outfile $@
+		--infile $(srcdir)/subprojects/pkcs11-json/generated/pkcs11.json --outfile $@
 
 libp11_kit_la_SOURCES = \
 	p11-kit/proxy.c p11-kit/proxy.h p11-kit/proxy-init.c \
@@ -545,7 +545,8 @@ check_LTLIBRARIES += \
 	mock-ten.la \
 	mock-eleven.la \
 	mock-twelve.la \
-	mock-thirteen.la
+	mock-thirteen.la \
+	mock-fourteen.la
 
 mock_one_la_SOURCES = p11-kit/mock-module-ep.c
 mock_one_la_LIBADD = libp11-test.la libp11-common.la
@@ -622,6 +623,18 @@ else
 mock_thirteen_la_LIBADD = $(mock_one_la_LIBADD)
 endif
 
+mock_fourteen_la_SOURCES = p11-kit/mock-module-ep12.c
+mock_fourteen_la_LDFLAGS = $(mock_one_la_LDFLAGS)
+if WITH_ASN1
+mock_fourteen_la_LIBADD = libp11-asn1.la $(mock_one_la_LIBADD) $(LIBTASN1_LIBS)
+else
+mock_fourteen_la_LIBADD = $(mock_one_la_LIBADD)
+endif
+
+if WITH_ASN1
+post_install_tests += p11-kit/test-softhsm2.sh
+endif
+
 EXTRA_DIST += \
 	p11-kit/fixtures \
 	p11-kit/templates \
@@ -637,4 +650,5 @@ EXTRA_DIST += \
 	p11-kit/test-import-public.sh \
 	p11-kit/test-list-mechanisms.sh \
 	p11-kit/test-generate-keypair.sh \
+	p11-kit/test-softhsm2.sh \
 	$(NULL)
