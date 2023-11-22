@@ -173,6 +173,8 @@ call_done (rpc_client *module,
            p11_rpc_message *msg,
            CK_RV ret)
 {
+	p11_buffer *buf;
+
 	assert (module != NULL);
 	assert (msg != NULL);
 
@@ -189,9 +191,9 @@ call_done (rpc_client *module,
 
 	/* We used the same buffer for input/output, so this frees both */
 	assert (msg->input == msg->output);
-	p11_rpc_buffer_free (msg->input);
-
+	buf = msg->input;
 	p11_rpc_message_clear (msg);
+	p11_rpc_buffer_free (buf);
 
 	return ret;
 }
@@ -430,9 +432,13 @@ proto_write_mechanism (p11_rpc_message *msg,
 	/* Make sure this is in the right order */
 	assert (!msg->signature || p11_rpc_message_verify_part (msg, "M"));
 
-	/* This case is valid for C_*Init () functions to cancel operation */
+	/*
+	 * The NULL mechanism is used for C_*Init () functions to
+	 * cancel operation.  We use a special value 0xffffffff as a
+	 * marker to indicate that.
+	 */
 	if (mech == NULL) {
-		p11_rpc_buffer_add_uint32 (msg->output, 0);
+		p11_rpc_buffer_add_uint32 (msg->output, 0xffffffff);
 		return p11_buffer_failed (msg->output) ? CKR_HOST_MEMORY : CKR_OK;
 	}
 
