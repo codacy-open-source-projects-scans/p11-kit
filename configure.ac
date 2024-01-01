@@ -84,6 +84,12 @@ case "$host" in
 		os_win32=yes
 		os_unix=no
 		;;
+	*-*-linux*)
+		AC_DEFINE_UNQUOTED(OS_UNIX, 1, [Building for unix])
+		os_win32=no
+		os_unix=yes
+		os_linux=yes
+		;;
 	*)
 		AC_DEFINE_UNQUOTED(OS_UNIX, 1, [Building for unix])
 		os_win32=no
@@ -94,6 +100,15 @@ AC_MSG_RESULT([$os_win32])
 AM_CONDITIONAL(OS_WIN32, test "$os_win32" = "yes")
 
 AC_C_BIGENDIAN
+
+case "$host_os" in
+kfreebsd*-gnu | gnu*)
+	PKG_CHECK_MODULES([LIBBSD], [libbsd-overlay], [
+			   CFLAGS="$CFLAGS $LIBBSD_CFLAGS"
+			   LIBS="$LIBS $LIBBSD_LIBS"
+			   ], AC_MSG_WARN([libbsd-overlay not found but probably needed]))
+;;
+esac
 
 # ------------------------------------------------------------------------------
 # Checks for libraries and headers
@@ -135,7 +150,11 @@ if test "$os_unix" = "yes"; then
 	AC_CHECK_HEADERS([sys/resource.h sys/un.h ucred.h])
 	AC_CHECK_MEMBERS([struct dirent.d_type],,,[#include <dirent.h>])
 	AC_CHECK_FUNCS([getprogname getexecname basename mkstemp mkdtemp])
-	AC_CHECK_FUNCS([getauxval getresuid secure_getenv])
+	AC_CHECK_FUNCS([getresuid secure_getenv])
+	if test "$os_linux" = "yes"; then
+		# Use getauxval on Linux only.
+		AC_CHECK_FUNCS([getauxval])
+	fi
 	AC_CHECK_FUNCS([strnstr memdup strndup])
 	AC_CHECK_FUNCS([reallocarray])
 	AC_CHECK_DECLS([reallocarray], [], [], [[#include <stdlib.h>]])
