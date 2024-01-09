@@ -41,13 +41,11 @@
 #include "debug.h"
 #include "iter.h"
 #include "message.h"
+#include "options.h"
 #include "tool.h"
 
-#ifdef OS_UNIX
-#include "tty.h"
-#endif
-
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -65,9 +63,8 @@ p11_kit_delete_profile (int argc,
 			char *argv[]);
 
 static int
-delete_profile (const char *token_str,
-		CK_PROFILE_ID profile,
-		bool login)
+delete_profile (p11_tool *tool,
+		CK_PROFILE_ID profile)
 {
 	int ret = 1;
 	CK_RV rv;
@@ -75,10 +72,7 @@ delete_profile (const char *token_str,
 	CK_ULONG i, count = 0;
 	CK_SESSION_HANDLE session = 0;
 	CK_FUNCTION_LIST *module = NULL;
-	CK_FUNCTION_LIST **modules = NULL;
-	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
-	P11KitIterBehavior behavior;
 	CK_OBJECT_CLASS klass = CKO_PROFILE;
 	CK_ATTRIBUTE template[] = {
 		{ CKA_CLASS, &klass, sizeof (klass) },
@@ -86,37 +80,12 @@ delete_profile (const char *token_str,
 	};
 	CK_ULONG template_len = sizeof (template) / sizeof (template[0]);
 
-	uri = p11_kit_uri_new ();
-	if (uri == NULL) {
-		p11_message (_("failed to allocate memory"));
-		goto cleanup;
-	}
-
-	if (p11_kit_uri_parse (token_str, P11_KIT_URI_FOR_TOKEN, uri) != P11_KIT_URI_OK) {
-		p11_message (_("failed to parse URI"));
-		goto cleanup;
-	}
-
-	modules = p11_kit_modules_load_and_initialize (0);
-	if (modules == NULL) {
-		p11_message (_("failed to load and initialize modules"));
-		goto cleanup;
-	}
-
-	behavior = P11_KIT_ITER_WANT_WRITABLE | P11_KIT_ITER_WITH_SESSIONS | P11_KIT_ITER_WITHOUT_OBJECTS;
-	if (login) {
-		behavior |= P11_KIT_ITER_WITH_LOGIN;
-#ifdef OS_UNIX
-		p11_kit_uri_set_pin_source (uri, "tty");
-#endif
-	}
-	iter = p11_kit_iter_new (uri, behavior);
+	iter = p11_tool_begin_iter (tool, P11_KIT_ITER_WANT_WRITABLE | P11_KIT_ITER_WITH_SESSIONS | P11_KIT_ITER_WITHOUT_OBJECTS);
 	if (iter == NULL) {
 		p11_message (_("failed to initialize iterator"));
-		goto cleanup;
+		return 1;
 	}
 
-	p11_kit_iter_begin (iter, modules);
 	rv = p11_kit_iter_next (iter);
 	if (rv != CKR_OK) {
 		if (rv == CKR_CANCEL)
@@ -165,10 +134,7 @@ delete_profile (const char *token_str,
 	ret = 0;
 
 cleanup:
-	p11_kit_iter_free (iter);
-	p11_kit_uri_free (uri);
-	if (modules != NULL)
-		p11_kit_modules_finalize_and_release (modules);
+	p11_tool_end_iter (tool, iter);
 
 	return ret;
 }
@@ -181,6 +147,8 @@ p11_kit_delete_profile (int argc,
 	CK_ULONG profile = CKA_INVALID;
 	p11_dict *profile_nicks = NULL;
 	bool login = false;
+	p11_tool *tool = NULL;
+	const char *provider = NULL;
 
 	enum {
 		opt_verbose = 'v',
@@ -188,6 +156,7 @@ p11_kit_delete_profile (int argc,
 		opt_help = 'h',
 		opt_profile = 'p',
 		opt_login = 'l',
+		opt_provider = CHAR_MAX + 2,
 	};
 
 	struct option options[] = {
@@ -196,6 +165,7 @@ p11_kit_delete_profile (int argc,
 		{ "help", no_argument, NULL, opt_help },
 		{ "profile", required_argument, NULL, opt_profile },
 		{ "login", no_argument, NULL, opt_login },
+		{ "provider", required_argument, NULL, opt_provider },
 		{ 0 },
 	};
 
@@ -203,6 +173,7 @@ p11_kit_delete_profile (int argc,
 		{ 0, "usage: p11-kit delete-profile --profile profile pkcs11:token" },
 		{ opt_profile, "specify the profile to delete" },
 		{ opt_login, "login to the token" },
+		{ opt_provider, "specify the module to use" },
 		{ 0 },
 	};
 
@@ -241,6 +212,9 @@ p11_kit_delete_profile (int argc,
 		case opt_login:
 			login = true;
 			break;
+		case opt_provider:
+			provider = optarg;
+			break;
 		case '?':
 			goto cleanup;
 		default:
@@ -262,19 +236,28 @@ p11_kit_delete_profile (int argc,
 		goto cleanup;
 	}
 
-#ifdef OS_UNIX
-	/* Register a fallback PIN callback that reads from terminal.
-	 * We don't care whether the registration succeeds as it is a fallback.
-	 */
-	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
-#endif
+	tool = p11_tool_new ();
+	if (!tool) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
 
-	ret = delete_profile (*argv, profile, login);
+	if (p11_tool_set_uri (tool, *argv, P11_KIT_URI_FOR_TOKEN) != P11_KIT_URI_OK) {
+		p11_message (_("failed to parse URI"));
+		goto cleanup;
+	}
+
+	if (!p11_tool_set_provider (tool, provider)) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
+
+	p11_tool_set_login (tool, login);
+
+	ret = delete_profile (tool, profile);
 
 cleanup:
-#ifdef OS_UNIX
-	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
-#endif
+	p11_tool_free (tool);
 	p11_dict_free (profile_nicks);
 
 	return ret;

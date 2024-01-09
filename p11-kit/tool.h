@@ -1,5 +1,7 @@
 /*
- * Copyright (c) 2013 Red Hat Inc.
+ * Copyright (c) 2023, Red Hat Inc.
+ *
+ * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,37 +31,32 @@
  * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
  * DAMAGE.
  *
- * Author: Stef Walter <stefw@collabora.co.uk>
+ * Author: Daiki Ueno
  */
 
-#ifndef P11_TOOL_H_
-#define P11_TOOL_H_
+#ifndef P11_KIT_TOOL_H
+#define P11_KIT_TOOL_H
 
-#include <getopt.h>
+#include "compat.h"
+#include "iter.h"
+#include "pkcs11.h"
+#include "uri.h"
 
-#define P11_TOOL_FALLBACK ""
+typedef struct p11_tool p11_tool;
 
-typedef struct {
-	const char *name;
-	int (*function) (int, char*[]);
-	const char *text;
-} p11_tool_command;
+p11_tool       *p11_tool_new        (void);
+void            p11_tool_free       (p11_tool *tool);
+P11KitUriResult p11_tool_set_uri    (p11_tool *tool,
+				     const char *string,
+				     P11KitUriType type);
+void            p11_tool_set_login  (p11_tool *tool,
+				     bool login);
+bool            p11_tool_set_provider
+                                    (p11_tool *tool,
+				     const char *provider);
+P11KitIter     *p11_tool_begin_iter (p11_tool *tool,
+				     P11KitIterBehavior behavior);
+void            p11_tool_end_iter   (p11_tool *tool,
+				     P11KitIter *iter);
 
-typedef struct  {
-	int option;
-	const char *text;
-	const char *arg;
-} p11_tool_desc;
-
-int        p11_tool_main              (int argc,
-                                       char *argv[],
-                                       const p11_tool_command *commands);
-
-int        p11_tool_getopt            (int argc,
-                                       char *argv[],
-                                       const struct option *longopts);
-
-void       p11_tool_usage             (const p11_tool_desc *usages,
-                                       const struct option *longopts);
-
-#endif /* P11_TOOL_H_ */
+#endif /* P11_KIT_TOOL_H */

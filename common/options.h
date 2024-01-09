@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, Collabora Ltd.
+ * Copyright (c) 2013 Red Hat Inc.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,44 +32,34 @@
  * Author: Stef Walter <stefw@collabora.co.uk>
  */
 
-#include "config.h"
+#ifndef P11_OPTIONS_H_
+#define P11_OPTIONS_H_
 
-#include "anchor.h"
-#include "check-format.h"
-#include "dump.h"
-#include "extract.h"
-#include "list.h"
-
-#include "buffer.h"
-#include "compat.h"
-#include "debug.h"
-#include "message.h"
-#include "path.h"
-#include "options.h"
-
-#include <assert.h>
-#include <ctype.h>
 #include <getopt.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
 
-#define N_(x) (x)
+#define P11_TOOL_FALLBACK ""
 
-static const p11_tool_command commands[] = {
-	{ "list", p11_trust_list, N_("List trust or certificates") },
-	{ "extract", p11_trust_extract, N_("Extract certificates and trust") },
-	{ "extract-compat", p11_trust_extract_compat, N_("Extract trust compatibility bundles") },
-	{ "anchor", p11_trust_anchor, N_("Add, remove, change trust anchors") },
-	{ "dump", p11_trust_dump, N_("Dump trust objects in internal format") },
-	{ "check-format", p11_trust_check_format, N_("Check the format of .p11-kit files") },
-	{ 0, }
-};
+typedef struct {
+	const char *name;
+	int (*function) (int, char*[]);
+	const char *text;
+} p11_tool_command;
 
-int
-main (int argc,
-      char *argv[])
-{
-	return p11_tool_main (argc, argv, commands);
-}
+typedef struct  {
+	int option;
+	const char *text;
+	const char *arg;
+} p11_tool_desc;
+
+int        p11_tool_main              (int argc,
+                                       char *argv[],
+                                       const p11_tool_command *commands);
+
+int        p11_tool_getopt            (int argc,
+                                       char *argv[],
+                                       const struct option *longopts);
+
+void       p11_tool_usage             (const p11_tool_desc *usages,
+                                       const struct option *longopts);
+
+#endif /* P11_OPTIONS_H_ */

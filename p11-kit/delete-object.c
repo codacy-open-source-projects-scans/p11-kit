@@ -39,13 +39,11 @@
 #include "debug.h"
 #include "iter.h"
 #include "message.h"
+#include "options.h"
 #include "tool.h"
 
-#ifdef OS_UNIX
-#include "tty.h"
-#endif
-
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 
 #ifdef ENABLE_NLS
@@ -60,47 +58,18 @@ p11_kit_delete_object (int argc,
 		       char *argv[]);
 
 static int
-delete_object (const char *token_str,
-	       bool login)
+delete_object (p11_tool *tool)
 {
 	int ret = 1;
 	CK_RV rv;
-	P11KitIterBehavior behavior;
-	CK_FUNCTION_LIST **modules = NULL;
-	P11KitUri *uri = NULL;
 	P11KitIter *iter = NULL;
 
-	uri = p11_kit_uri_new ();
-	if (uri == NULL) {
-		p11_message (_("failed to allocate memory"));
-		goto cleanup;
-	}
-
-	if (p11_kit_uri_parse (token_str, P11_KIT_URI_FOR_OBJECT_ON_TOKEN, uri) != P11_KIT_URI_OK) {
-		p11_message (_("failed to parse URI"));
-		goto cleanup;
-	}
-
-	modules = p11_kit_modules_load_and_initialize (0);
-	if (modules == NULL) {
-		p11_message (_("failed to load and initialize modules"));
-		goto cleanup;
-	}
-
-	behavior = P11_KIT_ITER_WANT_WRITABLE;
-	if (login) {
-		behavior |= P11_KIT_ITER_WITH_LOGIN;
-#ifdef OS_UNIX
-		p11_kit_uri_set_pin_source (uri, "tty");
-#endif
-	}
-	iter = p11_kit_iter_new (uri, behavior);
+	iter = p11_tool_begin_iter (tool, P11_KIT_ITER_WANT_WRITABLE);
 	if (iter == NULL) {
 		p11_message (_("failed to initialize iterator"));
-		goto cleanup;
+		return 1;
 	}
 
-	p11_kit_iter_begin (iter, modules);
 	rv = p11_kit_iter_next (iter);
 	if (rv != CKR_OK) {
 		if (rv == CKR_CANCEL)
@@ -119,10 +88,7 @@ delete_object (const char *token_str,
 	ret = 0;
 
 cleanup:
-	p11_kit_iter_free (iter);
-	p11_kit_uri_free (uri);
-	if (modules != NULL)
-		p11_kit_modules_finalize_and_release (modules);
+	p11_tool_end_iter (tool, iter);
 
 	return ret;
 }
@@ -131,14 +97,17 @@ int
 p11_kit_delete_object (int argc,
 		       char *argv[])
 {
-	int opt, ret;
+	int opt, ret = 2;
 	bool login = false;
+	p11_tool *tool = NULL;
+	const char *provider = NULL;
 
 	enum {
 		opt_verbose = 'v',
 		opt_quiet = 'q',
 		opt_help = 'h',
 		opt_login = 'l',
+		opt_provider = CHAR_MAX + 2,
 	};
 
 	struct option options[] = {
@@ -146,12 +115,14 @@ p11_kit_delete_object (int argc,
 		{ "quiet", no_argument, NULL, opt_quiet },
 		{ "help", no_argument, NULL, opt_help },
 		{ "login", no_argument, NULL, opt_login },
+		{ "provider", required_argument, NULL, opt_provider },
 		{ 0 },
 	};
 
 	p11_tool_desc usages[] = {
 		{ 0, "usage: p11-kit delete-object pkcs11:token" },
 		{ opt_login, "login to the token" },
+		{ opt_provider, "specify the module to use" },
 		{ 0 },
 	};
 
@@ -159,6 +130,9 @@ p11_kit_delete_object (int argc,
 		switch (opt) {
 		case opt_login:
 			login = true;
+			break;
+		case opt_provider:
+			provider = optarg;
 			break;
 		case opt_verbose:
 			p11_kit_be_loud ();
@@ -185,18 +159,28 @@ p11_kit_delete_object (int argc,
 		return 2;
 	}
 
-#ifdef OS_UNIX
-	/* Register a fallback PIN callback that reads from terminal.
-	 * We don't care whether the registration succeeds as it is a fallback.
-	 */
-	(void)p11_kit_pin_register_callback ("tty", p11_pin_tty_callback, NULL, NULL);
-#endif
+	tool = p11_tool_new ();
+	if (!tool) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
 
-	ret = delete_object (*argv, login);
+	if (p11_tool_set_uri (tool, *argv, P11_KIT_URI_FOR_OBJECT_ON_TOKEN) != P11_KIT_URI_OK) {
+		p11_message (_("failed to parse URI"));
+		goto cleanup;
+	}
 
-#ifdef OS_UNIX
-	p11_kit_pin_unregister_callback ("tty", p11_pin_tty_callback, NULL);
-#endif
+	if (!p11_tool_set_provider (tool, provider)) {
+		p11_message (_("failed to allocate memory"));
+		goto cleanup;
+	}
+
+	p11_tool_set_login (tool, login);
+
+	ret = delete_object (tool);
+
+ cleanup:
+	p11_tool_free (tool);
 
 	return ret;
 }
