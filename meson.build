@@ -1,5 +1,5 @@
 project('p11-kit', 'c',
-        version: '0.25.5',
+        version: '0.25.10',
         meson_version: '>= 0.51')
 
 version_arr = meson.project_version().split('.')
@@ -10,7 +10,7 @@ micro_version = version_arr[2].to_int()
 cc = meson.get_compiler('c')
 
 current = 4
-revision = 1
+revision = 5
 age = 4
 
 soversion = current - age
@@ -456,13 +456,9 @@ conf.set_quoted('TRUST_PATHS', trust_paths)
 # systemd
 
 with_systemd = false
-libsystemd_deps = []
-libsystemd = dependency('libsystemd', required: get_option('systemd'))
 systemd = dependency('systemd', required: get_option('systemd'))
-if libsystemd.found() and systemd.found()
+if systemd.found()
   systemduserunitdir = systemd.get_variable(pkgconfig : 'systemduserunitdir')
-  conf.set('WITH_SYSTEMD', 1)
-  libsystemd_deps += libsystemd
   with_systemd = true
 endif
 
@@ -493,3 +489,4 @@ if get_option('nls')
   subdir('po')
 endif
 subdir('bash-completion')
+subdir('zsh-completion')

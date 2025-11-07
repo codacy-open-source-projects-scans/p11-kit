@@ -1,7 +1,7 @@
 AC_PREREQ(2.61)
 
 AC_INIT([p11-kit],
-	[0.25.5],
+	[0.25.10],
 	[https://github.com/p11-glue/p11-kit/issues],
 	[p11-kit],
 	[https://p11-glue.github.io/p11-glue/p11-kit.html])
@@ -14,13 +14,13 @@ AC_INIT([p11-kit],
 #    ?    :    +1    :  ?   == internal changes that doesn't break anything.
 
 P11KIT_CURRENT=4
-P11KIT_REVISION=1
+P11KIT_REVISION=5
 P11KIT_AGE=4
 
 # ------------------------------------------------------------------------------
 # p11-kit RPC protocol versions
 P11KIT_RPC_MIN=0
-P11KIT_RPC_MAX=1
+P11KIT_RPC_MAX=2
 
 # ------------------------------------------------------------------------------
 
@@ -228,7 +228,11 @@ if test "$os_unix" = "yes"; then
 	                          [Whether vsock support available])
 	                AC_MSG_RESULT([yes])],
 	               [AC_MSG_RESULT([no])])
-
+else
+    # ($os_unix != "yes")
+    # termios-based passphrase query is only supported on Unix platforms
+    # See common/Makefile.am
+    AM_CONDITIONAL([NEED_READPASSPHRASE], [false])
 fi
 
 # These are thngs we can work around
@@ -683,9 +687,6 @@ AC_ARG_WITH([systemd],
                            [Disable systemd socket activation]))
 
 AS_IF([test "$with_systemd" != "no"], [
-	PKG_CHECK_MODULES([LIBSYSTEMD], [libsystemd], [],
-		[with_systemd=no])
-
 	PKG_CHECK_VAR([systemduserunitdir], [systemd], [systemduserunitdir], [],
 		[with_systemd=no])
 
